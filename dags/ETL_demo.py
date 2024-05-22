@@ -1,13 +1,10 @@
-import csv
 import polars as pl
+from handler import *
 from airflow import DAG
 from airflow.utils.dates import days_ago
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.providers.amazon.aws.hooks.s3 import S3Hook 
 from airflow.operators.python import PythonOperator
 from tempfile import NamedTemporaryFile
-from datetime import datetime, timedelta
-from io import StringIO
+from datetime import  timedelta
 
 default_args = {
     'owner': 'airflow_demo',
@@ -16,105 +13,66 @@ default_args = {
 }
 
 def extract_data():
-    db = PostgresHook(postgres_conn_id= 'supabase')
-    conn = db.get_conn()
-    cursor = conn.cursor()
-
-    timestamp=datetime.now().isoformat()
+    # getting the raw data from data source
+    conn, cursor = get_database_cursor('supabase')
     cursor.execute('''SELECT * FROM q3sales''')
+
+    # creating the csv
     with NamedTemporaryFile(
         mode='w',
-        suffix=timestamp
+        suffix='raw'
         ) as f:
-        csv_writer = csv.writer(f)
-        csv_writer.writerow([i[0] for i in cursor.description])
-        csv_writer.writerows(cursor)
+        csv = create_csv(f,cursor)
         f.flush()
         cursor.close()
         conn.close()
 
-
-        s3 = S3Hook(aws_conn_id = 'minio')
-        s3.load_file(
-            filename=f.name,
-            key=f'sales_{timestamp}',
-            bucket_name='etl-demo',
-            replace=True
-        )
+        # loading the data to S3 bucket
+        load_to_bucket('minio', f, 'sales')
 
 def transform_data():
-    s3 = S3Hook(aws_conn_id='minio')
-    bucket_name = 'etl-demo'
-    keys = s3.list_keys(bucket_name)
-    if keys:
-        keys.sort(reverse=True)
-        latest_key = keys[0]
-        data = s3.read_key(latest_key, bucket_name)
-
-        data_io = StringIO(data)
+    if bucket_empty('minio'):
+        raise FileNotFoundError("No files found in bucket.")
+    else:
+        data_io = get_most_recent_data('minio')
+        
+        # read data into polars dataframe and transform it
         df = pl.read_csv(data_io, has_header=True, separator=',')
         result = df.group_by('product_id').agg(pl.len().alias('count'))
-        #df.groupby('product_id').agg(pl.count().alias('count'))
 
-        timestamp=datetime.now().isoformat()
+        # creating the csv
         with NamedTemporaryFile(
             mode='w',
-            suffix=timestamp
+            suffix='transformed'
             ) as f:
             result.write_csv(f.name)
-            s3.load_file(
-                filename=f.name, 
-                key=f'transformed_{timestamp}',
-                bucket_name='etl-demo', 
-                replace=True
-            )
-    else:
-        raise FileNotFoundError("No files found in bucket.")
+
+            # loading the data to S3 bucket
+            load_to_bucket('minio', f, 'transformed')
         
 def load_data():
-    s3 = S3Hook(aws_conn_id='minio')
-    bucket_name = 'etl-demo'
-    keys = s3.list_keys(bucket_name)
-    if keys:
-        keys.sort(reverse=True)
-        latest_key = keys[0]
-        data = s3.read_key(latest_key, bucket_name)
+    if bucket_empty('minio'):
+        raise FileNotFoundError("No files found in bucket.")
+    else:
+        data_io = get_most_recent_data('minio')
 
-        # Establish a connection to the PostgreSQL database
-        hook = PostgresHook(postgres_conn_id='fashion_forward_local')
-        conn = hook.get_conn()
-        cursor = conn.cursor()
-        
-        # SQL to check if the table exists
-        cursor.execute(
-            "SELECT EXISTS (SELECT FROM information_schema.tables \
-                WHERE table_schema = 'public' AND table_name = \
-                'q3_product_quantities');"
-            )
-        table_exists = cursor.fetchone()[0]
-        
-        # Create the table if it does not exist
-        if not table_exists:
+        conn, cursor = get_database_cursor('fashion_forward_local')
+
+        if not destination_table_exists(cursor):
             # Constructing a CREATE TABLE statement from dataframe columns
-            # This is a simple construction and might need more complex types handling based on your data
             create_table_query = "CREATE TABLE public.q3_product_quantities (product_id VARCHAR(25), count INTEGER);"
             cursor.execute(create_table_query)
             conn.commit()
         
-        # Insert data into the PostgreSQL Database
-        # We are using the DataFrame's `to_csv` method for simplicity and direct SQL execution for the COPY command
-        data_io = StringIO(data)
         data_io.readline() # to get buffer past the headers
+        # uses the COPY SQL command to get data into relevant table
         cursor.copy_from(data_io, "q3_product_quantities", sep=',', null='')
         conn.commit()
         
         # Close cursor and connection
         cursor.close()
         conn.close()
-    else:
-        raise FileNotFoundError("No files found in bucket.")    
-
-
+    
 with DAG(
     dag_id='ETL_demo',
     default_args=default_args,

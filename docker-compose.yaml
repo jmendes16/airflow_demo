@@ -223,6 +223,7 @@ services:
       - -c
       - airflow
   
+  # The S3 compatible open source bucket
   minio:
     image: minio/minio:latest
     volumes:
@@ -239,37 +240,6 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
-
-  # spark-master:
-  #   image: extending_spark:latest
-  #   user: root
-  #   hostname: spark-master
-  #   networks:
-  #    - default_net
-  #   command: bin/spark-class org.apache.spark.deploy.master.Master
-  #   ports:
-  #     - "8081:8080"  # Spark web UI changed to not conflict with airflow
-  #     - "7077:7077"  # Spark master
-  #   environment:
-  #     - SPARK_MODE=master
-  #   volumes:
-  #     - ${AIRFLOW_PROJ_DIR:-.}/spark:/opt/spark
-
-  # spark-worker:
-  #   image: extending_spark:latest
-  #   user: root
-  #   networks:
-  #    - default_net
-  #   command: bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
-  #   depends_on:
-  #     - spark-master
-  #   environment:
-  #     - SPARK_MODE=worker
-  #     - SPARK_MASTER_URL=spark://spark-master:7077
-  #     - SPARK_WORKER_MEMORY=1G
-  #     - SPARK_WORKER_CORES=2
-  #   volumes:
-  #     - ${AIRFLOW_PROJ_DIR:-.}/spark:/opt/spark
 
   # You can enable flower by adding "--profile flower" option e.g. docker-compose --profile flower up
   # or by explicitly targeted on the command line e.g. docker-compose up flower.

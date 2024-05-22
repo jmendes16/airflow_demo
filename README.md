@@ -25,3 +25,5 @@ for for supabase, minio and your local postgres server
 Make sure your supabase instance is setup with the fashion forward database as it 
 appears in the SQL Ramp Up module.  You will also need to create a local database
 named 'fashion_forward'.  
+
+In the minio UI you need to create a bucket called etl-demo.
